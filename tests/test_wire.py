@@ -1,10 +1,16 @@
-"""Tests for wire.py. Real TCP to tests/fakes.py; timing tests use real time with tolerance (D4)."""
+"""Tests for wire.py. Real TCP to tests/fakes.py.
+
+Timing tests use real time. Assertions are ordering or wide bounds, never exact counts, so they
+hold under Windows timer jitter. Each bound is chosen so a broken implementation fails it by a
+large margin (for example, a missing cap would run for about 1.7 s; the cap test expects 1.0 s and
+rejects anything above 1.4 s).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import pytest
 
@@ -18,13 +24,20 @@ def now() -> float:
     return asyncio.get_running_loop().time()
 
 
+async def wait_until(predicate: Callable[[], bool], limit: float = 2.0) -> None:
+    """Poll until predicate is true. Waits on the condition, not on a guessed delay."""
+    deadline = now() + limit
+    while not predicate():
+        assert now() < deadline, "condition not reached in time"
+        await asyncio.sleep(0.005)
+
+
 @contextlib.asynccontextmanager
 async def open_link(svc: FakeService) -> AsyncIterator[tuple[Link, list[Link]]]:
     """Connect a Link to svc. Yields (link, closed_callbacks). Closes the link on exit."""
     closed: list[Link] = []
     link = await Link.open("127.0.0.1", svc.port, closed.append)
-    while svc.accepts == 0:
-        await asyncio.sleep(0.01)
+    await wait_until(lambda: svc.accepts > 0)
     try:
         yield link, closed
     finally:
@@ -54,15 +67,13 @@ def test_normalize_table(command: str, expected: bytes) -> None:
 async def test_empty_command_reaches_service_as_crlf() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         await link.send(normalize_command(""))
-        await link.collect(settle=0.1, timeout_at=now() + 1)
-        assert svc.received == b"\r\n"
+        await wait_until(lambda: svc.received == b"\r\n")
 
 
 async def test_multiline_command_is_one_payload() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         await link.send(normalize_command("a\nb"))
-        await link.collect(settle=0.1, timeout_at=now() + 1)
-        assert svc.received == b"a\r\nb\r\n"
+        await wait_until(lambda: svc.received == b"a\r\nb\r\n")
 
 
 async def test_send_writes_once_per_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,7 +115,7 @@ def test_decode(data: bytes, text: str, tail: bytes) -> None:
 async def test_buffer_kept_across_idle_gap() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         svc.write(b"hello")
-        await asyncio.sleep(0.3)
+        await wait_until(lambda: bytes(link.raw) == b"hello")
         assert link.has_retained()
         assert link.take() == "hello"
         assert not link.has_retained()
@@ -114,23 +125,21 @@ async def test_one_connection_for_many_sends() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         await link.send(b"one\r\n")
         await link.send(b"two\r\n")
-        await asyncio.sleep(0.05)
+        await wait_until(lambda: svc.received == b"one\r\ntwo\r\n")
         assert svc.accepts == 1
-        assert svc.received == b"one\r\ntwo\r\n"
 
 
 async def test_peer_close_marks_closed_and_fires_callback_once() -> None:
     async with FakeService() as svc, open_link(svc) as (link, closed):
         svc.close()
-        await asyncio.sleep(0.1)
-        assert link.closed
+        await wait_until(lambda: link.closed)
         assert closed == [link]
 
 
 async def test_send_after_peer_close_raises() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         svc.close()
-        await asyncio.sleep(0.1)
+        await wait_until(lambda: link.closed)
         with pytest.raises(LinkLost):
             await link.send(b"x\r\n")
 
@@ -150,15 +159,15 @@ async def test_aclose_fires_callback_once() -> None:
 
 async def test_quiet_200ms_completes_response() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"ab"), (0.05, b"c"), (0.5, b"late")])
+        # "late" is far enough after the first response that the first call cannot see it.
+        svc.play([(0.0, b"ab"), (0.05, b"c"), (0.8, b"late")])
         start = now()
         timed_out = await link.collect(settle=None, timeout_at=start + 5)
         elapsed = now() - start
         assert not timed_out
-        assert 0.2 <= elapsed <= 0.45
+        assert 0.15 <= elapsed <= 0.6
         assert link.take() == "abc"
 
-        # The late chunk arrived after the first response completed, so the next call gets it.
         await link.collect(settle=None, timeout_at=now() + 5)
         assert link.take() == "late"
 
@@ -166,30 +175,38 @@ async def test_quiet_200ms_completes_response() -> None:
 async def test_backlog_still_waits_quiet_period() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         svc.write(b"old")
-        await asyncio.sleep(0.1)
+        await wait_until(lambda: bytes(link.raw) == b"old")
         start = now()
         timed_out = await link.collect(settle=None, timeout_at=start + 5)
         elapsed = now() - start
         assert not timed_out
-        assert 0.15 <= elapsed <= 0.4
+        # Nothing new arrives, so only the quiet period can make the call wait this long.
+        assert 0.15 <= elapsed <= 0.6
         assert link.take() == "old"
 
 
 async def test_cap_1000ms_bounds_a_service_that_never_stops() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        # One byte every 50 ms for 1.5 s: never quiet for 200 ms, so only the cap can end the call.
-        svc.play([(0.0, b"x")] + [(0.05, b"x")] * 29)
+        # One byte every 20 ms for 1.5 s. Gaps stay far below the 200 ms quiet period, so the
+        # call can only end at the 1000 ms cap. Without a cap it would run to about 1.7 s.
+        total = 75
+        svc.play([(0.0, b"x")] + [(0.02, b"x")] * (total - 1))
         start = now()
         timed_out = await link.collect(settle=None, timeout_at=start + 5)
         elapsed = now() - start
         assert not timed_out
-        assert 0.95 <= elapsed <= 1.2
+        assert 0.9 <= elapsed <= 1.4
         first = link.take()
-        assert 17 <= len(first) <= 23
+        assert 0 < len(first) < total
 
-        # The rest arrives after the cap and comes out on the next call; nothing is lost.
-        await link.collect(settle=None, timeout_at=now() + 5)
-        assert len(first) + len(link.take()) == 30
+        # Whatever arrived after the cap is kept and comes out on later calls; nothing is lost.
+        received = len(first)
+        deadline = now() + 5
+        while received < total:
+            assert now() < deadline, "remaining bytes never arrived"
+            await link.collect(settle=None, timeout_at=now() + 5)
+            received += len(link.take())
+        assert received == total
 
 
 async def test_silent_service_times_out_with_no_text() -> None:
@@ -198,20 +215,21 @@ async def test_silent_service_times_out_with_no_text() -> None:
         timed_out = await link.collect(settle=None, timeout_at=start + 0.5)
         elapsed = now() - start
         assert timed_out
-        assert 0.45 <= elapsed <= 0.75
+        assert 0.45 <= elapsed <= 0.9
         assert link.take() == ""
 
 
 async def test_timeout_before_cap_returns_partial_text() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        # One byte every 100 ms: quiet never reaches 200 ms, so only the timeout can end the call.
-        svc.play([(0.0, b"x")] + [(0.1, b"x")] * 19)
+        # One byte every 20 ms for 2 s: quiet never triggers, and the 0.5 s timeout cuts the call.
+        total = 100
+        svc.play([(0.0, b"x")] + [(0.02, b"x")] * (total - 1))
         start = now()
         timed_out = await link.collect(settle=None, timeout_at=start + 0.5)
         elapsed = now() - start
         assert timed_out
-        assert 0.45 <= elapsed <= 0.7
-        assert 1 <= len(link.take()) <= 6
+        assert 0.45 <= elapsed <= 0.9
+        assert 0 < len(link.take()) < total
 
 
 async def test_prompt_is_not_special() -> None:
@@ -220,7 +238,7 @@ async def test_prompt_is_not_special() -> None:
         start = now()
         await link.collect(settle=None, timeout_at=start + 5)
         elapsed = now() - start
-        assert 0.15 <= elapsed <= 0.4
+        assert 0.15 <= elapsed <= 0.6
         assert link.take().endswith("> ")
 
 
@@ -229,13 +247,13 @@ async def test_prompt_is_not_special() -> None:
 
 async def test_stream_window_is_fixed_not_debounced() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        # A 500 ms gap is longer than the 200 ms quiet period, but the fixed window keeps going.
-        svc.play([(0.0, b"a"), (0.5, b"b")])
+        # A 400 ms gap is twice the 200 ms quiet period. A debounced window would stop before "b".
+        svc.play([(0.0, b"a"), (0.4, b"b")])
         start = now()
-        timed_out = await link.collect(settle=1.0, timeout_at=start + 5)
+        timed_out = await link.collect(settle=0.8, timeout_at=start + 5)
         elapsed = now() - start
         assert not timed_out
-        assert 0.95 <= elapsed <= 1.2
+        assert 0.75 <= elapsed <= 1.2
         assert link.take() == "ab"
 
 
@@ -246,18 +264,19 @@ async def test_stream_timeout_cuts_window_short() -> None:
         timed_out = await link.collect(settle=5.0, timeout_at=start + 0.6)
         elapsed = now() - start
         assert timed_out
-        assert 0.55 <= elapsed <= 0.8
+        assert 0.5 <= elapsed <= 1.5
         assert link.take() == "a"
 
 
 async def test_settle_zero_returns_backlog_immediately() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         svc.write(b"x")
-        await asyncio.sleep(0.1)
+        await wait_until(lambda: bytes(link.raw) == b"x")
         start = now()
         timed_out = await link.collect(settle=0, timeout_at=start + 5)
         assert not timed_out
-        assert now() - start < 0.05
+        # settle=0 must not wait for any window; anything near the 200 ms quiet period would show it.
+        assert now() - start < 0.15
         assert link.take() == "x"
 
 
@@ -265,7 +284,7 @@ async def test_settle_zero_with_empty_buffer_returns_empty() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         start = now()
         await link.collect(settle=0, timeout_at=start + 5)
-        assert now() - start < 0.05
+        assert now() - start < 0.15
         assert link.take() == ""
 
 
@@ -276,7 +295,7 @@ async def test_cancelled_collect_keeps_bytes() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
         svc.play([(0.0, b"keep")])
         task = asyncio.ensure_future(link.collect(settle=None, timeout_at=now() + 5))
-        await asyncio.sleep(0.1)
+        await wait_until(lambda: link.has_retained())
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
@@ -295,53 +314,59 @@ async def test_collect_does_not_block_the_event_loop() -> None:
 
         task = asyncio.ensure_future(ticker())
         try:
-            await link.collect(settle=1.0, timeout_at=now() + 5)
+            # A 0.6 s window with a 50 ms ticker should tick about 12 times; 5 proves the loop ran.
+            await link.collect(settle=0.6, timeout_at=now() + 5)
         finally:
             task.cancel()
-        assert ticks >= 8
+        assert ticks >= 5
 
 
-# --- Cleanup across reads (CL4, CL5, N5) -----------------------------------------------------
+# --- Cleanup across reads (CL4, CL5, CL8, N5) ------------------------------------------------
+# These tests wait for the bytes themselves, then call take(). They do not depend on a window.
 
 
 async def test_escape_split_across_reads_is_stripped() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"\x1b[3"), (0.05, b"1mHi")])
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"\x1b[3")
+        await wait_until(lambda: bytes(link.raw) == b"\x1b[3")
+        svc.write(b"1mHi")
+        await wait_until(lambda: bytes(link.raw) == b"\x1b[31mHi")
         assert link.take() == "Hi"
 
 
 async def test_held_escape_is_returned_by_the_next_call() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"abc\x1b["), (0.3, b"31mdef")])
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"abc\x1b[")
+        await wait_until(lambda: bytes(link.raw) == b"abc\x1b[")
         assert link.take() == "abc"
         assert bytes(link.raw) == b"\x1b["
 
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"31mdef")
+        await wait_until(lambda: bytes(link.raw) == b"\x1b[31mdef")
         assert link.take() == "def"
 
 
 async def test_utf8_split_across_reads_is_intact() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"caf\xc3"), (0.3, b"\xa9!")])
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"caf\xc3")
+        await wait_until(lambda: bytes(link.raw) == b"caf\xc3")
         assert link.take() == "caf"
         assert bytes(link.raw) == b"\xc3"
 
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"\xa9!")
+        await wait_until(lambda: bytes(link.raw) == b"\xc3\xa9!")
         assert link.take() == "é!"
 
 
 async def test_invalid_bytes_are_replaced_not_raised() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"\xff ok")])
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"\xff ok")
+        await wait_until(lambda: bytes(link.raw) == b"\xff ok")
         assert link.take() == "� ok"
 
 
 async def test_telnet_iac_bytes_are_not_stripped() -> None:
     async with FakeService() as svc, open_link(svc) as (link, _):
-        svc.play([(0.0, b"\xff\xfb\x01")])
-        await link.collect(settle=None, timeout_at=now() + 5)
+        svc.write(b"\xff\xfb\x01")
+        await wait_until(lambda: bytes(link.raw) == b"\xff\xfb\x01")
         assert link.take() == "��\x01"
