@@ -130,3 +130,12 @@ class TurnService(FakeService):
 
 class StreamService(FakeService):
     """Pushes output on its own schedule, like a streaming MUD. Ignores what the client sends."""
+
+
+async def wait_until(predicate: Callable[[], bool], limit: float = 2.0) -> None:
+    """Poll until predicate is true. Waits on the condition, not on a guessed delay."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit
+    while not predicate():
+        assert loop.time() < deadline, "condition not reached in time"
+        await asyncio.sleep(0.005)

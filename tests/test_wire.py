@@ -10,26 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 
 import pytest
 
+from tests.fakes import FakeService, wait_until
 from text_adventure_mcp.wire import Link, LinkLost, decode, normalize_command
-from tests.fakes import FakeService
 
 pytestmark = pytest.mark.anyio
 
 
 def now() -> float:
     return asyncio.get_running_loop().time()
-
-
-async def wait_until(predicate: Callable[[], bool], limit: float = 2.0) -> None:
-    """Poll until predicate is true. Waits on the condition, not on a guessed delay."""
-    deadline = now() + limit
-    while not predicate():
-        assert now() < deadline, "condition not reached in time"
-        await asyncio.sleep(0.005)
 
 
 @contextlib.asynccontextmanager
