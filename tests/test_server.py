@@ -139,8 +139,9 @@ async def test_zero_timeout_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_non_finite_is_rejected(value: float) -> None:
     app = create_server()
 
-    with pytest.raises(ToolError):
+    with pytest.raises(ToolError) as info:
         await app.call_tool("text_adventure", {"command": "look", "timeout": value})
+    assert "timeout must be a finite number >= 0" in str(info.value)
 
 
 async def test_hard_cap_wins_over_settle() -> None:
