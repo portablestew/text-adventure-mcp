@@ -279,3 +279,13 @@ async def test_connect_refused_has_no_status_line(monkeypatch: pytest.MonkeyPatc
     assert info.value.status == []
     assert info.value.text == ""
     assert info.value.reason.startswith("could not connect to 127.0.0.1:9: ")
+
+
+async def test_unusable_host_is_a_connect_failure() -> None:
+    # asyncio raises ValueError, not OSError, for a host it cannot resolve at all.
+    async with managed_session() as session:
+        with pytest.raises(Failure) as info:
+            await send(session, "bad\x00host:80", "look")
+
+    assert info.value.status == []
+    assert info.value.reason.startswith("could not connect to bad\x00host:80: ")

@@ -130,7 +130,8 @@ class Session:
                     )
             except TimeoutError:
                 return Outcome([_timed_out_line(timeout)], "")
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
+                # ValueError: the host is not usable at all, e.g. it contains a NUL byte.
                 raise Failure([], "", f"could not connect to {key}: {exc}") from exc
             self._links[key] = link
             opened = True
