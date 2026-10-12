@@ -8,8 +8,8 @@ ESC = 0x1B
 BEL = 0x07
 BACKSLASH = 0x5C
 
-# An unfinished sequence longer than this is dropped rather than held. Keeps a malformed,
-# unterminated OSC or CSI from holding the stream forever.
+# An unfinished sequence longer than this is not held. Keeps a malformed, unterminated OSC or CSI
+# from holding the stream forever. Its ESC and introducer are dropped and the rest is kept as text.
 MAX_PENDING = 64
 
 # ESC followed by one of these opens a string sequence (OSC, DCS, SOS, PM, APC), ended by ST.
@@ -20,8 +20,9 @@ def strip(data: bytes) -> tuple[bytes, bytes]:
     """Remove every ESC-introduced sequence.
 
     Returns (clean, pending). pending is an unfinished sequence at the very end of data, held
-    back for the next read. It is empty when data ends cleanly, and when the unfinished sequence
-    is longer than MAX_PENDING (then it is dropped).
+    back for the next read. It is empty when data ends cleanly. An unfinished sequence longer than
+    MAX_PENDING is not held: its ESC and introducer are dropped and the bytes after them are
+    kept as text.
     """
     out = bytearray()
     i = 0
@@ -34,9 +35,10 @@ def strip(data: bytes) -> tuple[bytes, bytes]:
         end = _sequence_end(data, i)
         if end is None:
             pending = data[i:]
-            if len(pending) > MAX_PENDING:
-                return bytes(out), b""
-            return bytes(out), bytes(pending)
+            if len(pending) <= MAX_PENDING:
+                return bytes(out), bytes(pending)
+            i += 2
+            continue
         i = end
     return bytes(out), b""
 

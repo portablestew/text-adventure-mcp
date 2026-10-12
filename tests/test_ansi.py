@@ -62,10 +62,17 @@ def test_pending_at_limit_is_held() -> None:
     assert ansi.strip(data) == (b"", data)
 
 
-def test_pending_over_limit_is_dropped() -> None:
+def test_pending_over_limit_is_not_held() -> None:
     data = b"\x1b]" + b"x" * (ansi.MAX_PENDING - 1)
     assert len(data) == ansi.MAX_PENDING + 1
-    assert ansi.strip(b"ok" + data) == (b"ok", b"")
+    assert ansi.strip(b"ok" + data) == (b"ok" + b"x" * (ansi.MAX_PENDING - 1), b"")
+
+
+def test_text_after_over_limit_unterminated_escape_is_returned() -> None:
+    # Only the ESC and its introducer go; the body and the text after it are kept.
+    data = b"\x1b]" + b"x" * 62 + b"after"
+    assert len(data) > ansi.MAX_PENDING
+    assert ansi.strip(data) == (b"x" * 62 + b"after", b"")
 
 
 def test_held_sequence_completes_on_next_read() -> None:
