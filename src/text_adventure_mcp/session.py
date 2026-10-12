@@ -81,7 +81,9 @@ class Session:
         """
         deadline = asyncio.get_running_loop().time() + timeout
 
-        lock = self._locks.setdefault(address.text, asyncio.Lock())
+        lock = self._locks.get(address.text)
+        if lock is None:
+            lock = self._locks[address.text] = asyncio.Lock()
         try:
             # timeout_at, not wait_for: with timeout=0 an uncontended lock must still be taken.
             async with asyncio.timeout_at(deadline):
