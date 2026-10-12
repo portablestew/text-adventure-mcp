@@ -173,6 +173,26 @@ async def test_lock_wait_timeout_leaves_buffer_for_holder() -> None:
         assert (await holder).text == "hello"
 
 
+async def test_blocked_send_is_bounded_by_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A write that never completes, as when the peer stops reading. The send is stubbed because a
+    # real blocked write could not be produced on the test machine: its loopback accepted 1 GB
+    # with no reader, so drain() never waited. The call must still return at its deadline, and
+    # the socket must be dropped rather than reused.
+    async def stuck_send(self: Link, payload: bytes) -> None:
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(Link, "send", stuck_send)
+    async with TurnService(echo) as svc, managed_session() as session:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        result = await send(session, svc.address, "look", timeout=0.3)
+        elapsed = loop.time() - started
+
+        assert result == Outcome([connected(svc.address), "[status] timed out after 0.3s"], "")
+        assert elapsed < 1.5
+        assert svc.address not in session._links
+
+
 async def test_connect_timeout_returns_timed_out_with_no_text(monkeypatch: pytest.MonkeyPatch) -> None:
     async def slow_open(host: str, port: int, on_close: Callable[[Link], None]) -> Link:
         await asyncio.sleep(5)

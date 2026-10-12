@@ -136,7 +136,19 @@ class Session:
             opened = True
 
         try:
-            await link.send(payload)
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await link.send(payload)
+            except TimeoutError:
+                # The write was still blocked at the deadline, so part of the command may be on the
+                # wire and the socket cannot be reused. Drop it and report what it had received.
+                text = link.take()
+                self._drop(key, link)
+                await link.abort()
+                if opened:
+                    status.append(_connected_line(key))
+                status.append(_timed_out_line(timeout))
+                return Outcome(status, text)
             timed_out = await link.collect(settle=settle, timeout_at=deadline)
         except LinkLost as exc:
             # The socket is gone. Drop it, and hand out what it had received.

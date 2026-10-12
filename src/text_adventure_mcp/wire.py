@@ -142,6 +142,14 @@ class Link:
         with contextlib.suppress(OSError):
             await self._writer.wait_closed()
 
+    async def abort(self) -> None:
+        """Drop the socket at once, discarding unsent bytes. For a send that was abandoned.
+
+        close() would wait for a peer that is not reading to take the rest of the payload.
+        """
+        self._writer.transport.abort()
+        await self.aclose()
+
     async def _collect_turn(self, loop: asyncio.AbstractEventLoop, timeout_at: float) -> bool:
         start = loop.time()
         first: float | None = None
