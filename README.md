@@ -19,6 +19,9 @@ One tool, `text_adventure`:
 | `settle`  | number, optional | no       | not set          | Fixed collection window, in seconds. Not set = wait for a complete response. |
 | `timeout` | number, optional | no       | `20`, or `20 + settle` | Hard cap on the call, in seconds. |
 
+Failed calls are reported as MCP tool errors. The MCP SDK puts `Error executing tool text_adventure: `
+in front of the message, so the status lines and any partial text follow that prefix.
+
 ## Safety
 
 This is an arbitrary outbound TCP client and can reach anything the host can reach, including
