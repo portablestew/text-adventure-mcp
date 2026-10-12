@@ -21,7 +21,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-from tests.fakes import FakeService, Schedule, TurnService, wait_until
+from tests.fakes import Schedule, TurnService
 
 pytestmark = pytest.mark.anyio
 

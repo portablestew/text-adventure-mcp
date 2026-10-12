@@ -25,6 +25,10 @@ This is an arbitrary outbound TCP client and can reach anything the host can rea
 internal services. That is the point. Do not expose it to untrusted callers, and do not point it at
 services you are not authorized to use.
 
+The connection is raw TCP. The server does no telnet negotiation (no IAC DO/WILL/WONT/DONT replies)
+and strips no IAC bytes. Telnet bytes from the service reach the caller as replacement characters.
+Only ANSI escape sequences are removed from the text.
+
 ## Install and run
 
 Requires Python 3.11 or newer.
