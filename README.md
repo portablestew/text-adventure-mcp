@@ -36,6 +36,28 @@ Only ANSI escape sequences are removed from the text.
 
 Requires Python 3.11 or newer.
 
+Straight from PyPI (stdio transport; blocks waiting for a client):
+
+```bash
+uvx text-adventure-mcp
+```
+
+Or point an MCP client at it:
+
+```json
+{
+  "servers": {
+    "text-adventure": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["text-adventure-mcp"]
+    }
+  }
+}
+```
+
+## Develop
+
 ```bash
 uv venv .venv --python 3.12
 uv pip install -e ".[dev]"

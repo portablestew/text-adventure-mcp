@@ -13,6 +13,7 @@ import sys
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from text_adventure_mcp import __version__
 from text_adventure_mcp.session import Failure, Outcome, Session, parse_address
 from text_adventure_mcp.wire import normalize_command
 
@@ -36,7 +37,7 @@ log = logging.getLogger(__name__)
 
 def create_server() -> MCPServer:
     """Build the MCP app. Each server gets its own Session, so tests start with clean state."""
-    app = MCPServer("text-adventure-mcp")
+    app = MCPServer("text-adventure-mcp", version=__version__)
     session = Session()
 
     @app.tool(structured_output=False, description=TOOL_DESCRIPTION)
