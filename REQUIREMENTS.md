@@ -20,16 +20,17 @@ Exactly one tool. No lifecycle tools.
 
 ### `text_adventure`
 
-| param     | type             | required | default          | meaning                                                     |
-|-----------|------------------|----------|------------------|-------------------------------------------------------------|
-| `command` | string           | yes      | —                | Text to send. Line-normalized before sending; empty sends a blank line. |
-| `address` | string           | no       | `127.0.0.1:3000` | `host:port` of the service. Identifies the connection.      |
-| `settle`  | number, optional | no       | not set          | Fixed collection window, in seconds. Not set = wait for a complete response. |
-| `timeout` | number, optional | no       | `20`, or `20 + settle` | Hard cap on the call, in seconds.                     |
+| param        | type             | required | default          | meaning                                                     |
+|--------------|------------------|----------|------------------|-------------------------------------------------------------|
+| `command`    | string           | yes      | —                | Text to send. Line-normalized before sending; empty sends a blank line. |
+| `address`    | string           | no       | `127.0.0.1:3000` | `host:port` of the service. Identifies the connection.      |
+| `settle_ms`  | integer, optional | no       | not set          | Fixed collection window, in milliseconds. Not set = wait for a complete response. |
+| `timeout_ms` | integer, optional | no       | `20000`, or `20000 + settle_ms` | Hard cap on the call, in milliseconds.        |
 
-`settle` and `timeout` are optional numbers, not nullable fields — the caller omits them. An
-explicit `null` is accepted and means the same as omitted, since typed proxies routinely emit
-`null` for an unset field. In Python they are `float | None = None`.
+`settle_ms` and `timeout_ms` are optional whole-millisecond integers from `0` to `300000`, not
+nullable fields — the caller omits them. An explicit `null` is accepted and means the same as
+omitted, since typed proxies routinely emit `null` for an unset field. In Python they are
+`int | None = None`.
 
 ## Behavior
 
@@ -57,21 +58,22 @@ Enter. There is no send-nothing mode.
 ### Receiving
 
 The return value is always **everything received on that connection since the previous call on that
-connection**, including anything that arrived while the agent was doing other work. `settle` and
-`timeout` only decide how long to wait before returning — never what is returned.
+connection**, including anything that arrived while the agent was doing other work. `settle_ms` and
+`timeout_ms` only decide how long to wait before returning — never what is returned.
 
 The wait runs on every call, including when output is already buffered. A call with a backlog still
 waits the full window, then returns the backlog together with whatever arrived meanwhile.
 
-- `settle` not set (turn-based, e.g. Zork): wait for the first byte, bounded by `timeout`, then
+- `settle_ms` not set (turn-based, e.g. Zork): wait for the first byte, bounded by `timeout_ms`, then
   collect until the response is complete. A response is complete when nothing has arrived for
   200 ms, or when collection has run for 1000 ms since the first byte — whichever comes first.
   Both figures are internal constants, not caller-configurable. The 1000 ms cap exists so a
   service that never goes quiet still returns.
-- `settle: <seconds>` (streaming, e.g. an online MUD): collect for exactly that many seconds, then
-  return. This is a fixed window, not a debounce. `settle: 0` returns immediately with whatever is
-  already buffered. The 1000 ms cap does not apply; the caller chose the window.
-- `timeout`: hard cap on the entire call, including connection setup. On expiry, return whatever
+- `settle_ms: <milliseconds>` (streaming, e.g. an online MUD): collect for exactly that many
+  milliseconds, then return. This is a fixed window, not a debounce. `settle_ms: 0` returns
+  immediately with whatever is already buffered. The 1000 ms cap does not apply; the caller chose
+  the window.
+- `timeout_ms`: hard cap on the entire call, including connection setup. On expiry, return whatever
   has been received so far — an empty string if nothing has.
 
 A new connection's buffer starts at connect time, so the service's banner and login prompt come
@@ -91,7 +93,7 @@ The reported set is closed:
 
 - `[status] connected to <address>` — this call opened a connection.
 - `[status] connection to <address> lost` — the socket failed or closed mid-call.
-- `[status] timed out after <n>s` — `timeout` expired before the service finished.
+- `[status] timed out after <n>s` — `timeout_ms` expired before the service finished.
 
 Nothing else is reported. Routine sends, empty responses, and normal completions are silent. Status
 lines travel with the result whether it is returned normally or as a tool error.
@@ -109,7 +111,7 @@ lines travel with the result whether it is returned normally or as a tool error.
   reconnects.
 - Failures — connect, send, or mid-call socket loss — surface as MCP tool errors. The error message
   carries whatever output had been received and not yet returned, so no text is ever thrown away.
-- Invalid parameter values (negative `settle` or `timeout`) are tool errors.
+- Invalid parameter values (`settle_ms` or `timeout_ms` outside `0..300000`) are tool errors.
 
 ## Constraints
 

@@ -12,12 +12,12 @@ The connection is stateful, so the server keeps one socket open per `address` ac
 
 One tool, `text_adventure`:
 
-| parameter | type             | required | default          | meaning |
-|-----------|------------------|----------|------------------|---------|
-| `command` | string           | yes      | —                | Text to send. Empty sends a blank line. |
-| `address` | string           | no       | `127.0.0.1:3000` | `host:port` of the service. Identifies the connection. |
-| `settle`  | number, optional | no       | not set          | Fixed collection window, in seconds. Not set = wait for a complete response. |
-| `timeout` | number, optional | no       | `20`, or `20 + settle` | Hard cap on the call, in seconds. |
+| parameter    | type             | required | default          | meaning |
+|--------------|------------------|----------|------------------|---------|
+| `command`    | string           | yes      | —                | Text to send. Empty sends a blank line. |
+| `address`    | string           | no       | `127.0.0.1:3000` | `host:port` of the service. Identifies the connection. |
+| `settle_ms`  | integer, optional | no       | not set          | Fixed collection window, in milliseconds. Not set = wait for a complete response. |
+| `timeout_ms` | integer, optional | no       | `20000`, or `20000 + settle_ms` | Hard cap on the call, in milliseconds. |
 
 Failed calls are reported as MCP tool errors. The MCP SDK puts `Error executing tool text_adventure: `
 in front of the message, so the status lines and any partial text follow that prefix.

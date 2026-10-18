@@ -7,7 +7,6 @@ Only this module knows about MCP.
 from __future__ import annotations
 
 import logging
-import math
 import sys
 
 from mcp.server.mcpserver import MCPServer
@@ -19,14 +18,17 @@ from text_adventure_mcp.wire import normalize_command
 
 DEFAULT_ADDRESS = "127.0.0.1:3000"
 DEFAULT_TIMEOUT_S = 20.0
+MS = 1000.0
+MAX_MS = 300_000
 
 TOOL_DESCRIPTION = """\
 Send one line of text to a line-oriented TCP service and return what it sends back.
 
 The connection stays open between calls, so the service keeps its state. Every call is a turn: an
-empty command sends a bare newline. Without settle, the call returns when the reply goes quiet for
-200 ms, or 1 s after the first byte, whichever comes first. With settle, the call collects output for
-exactly that many seconds. timeout caps the whole call and defaults to 20 s, or 20 s plus settle.
+empty command sends a bare newline. Without settle_ms, the call returns when the reply goes quiet
+for 200 ms, or 1 s after the first byte, whichever comes first. With settle_ms, the call collects
+output for exactly that many milliseconds. timeout_ms caps the whole call and defaults to 20 s, or
+20 s plus settle_ms. settle_ms and timeout_ms are milliseconds, a whole number from 0 to 300000.
 
 Output starts with [status] lines only when a connection is opened, a connection is lost, or a call
 times out. Anything else is the service's own text.\
@@ -44,16 +46,18 @@ def create_server() -> MCPServer:
     async def text_adventure(
         command: str,
         address: str = DEFAULT_ADDRESS,
-        settle: float | None = None,
-        timeout: float | None = None,
+        settle_ms: int | None = None,
+        timeout_ms: int | None = None,
     ) -> str:
-        _check_seconds("settle", settle)
-        _check_seconds("timeout", timeout)
+        _check_ms("settle_ms", settle_ms)
+        _check_ms("timeout_ms", timeout_ms)
         try:
             target = parse_address(address)
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
 
+        settle = None if settle_ms is None else settle_ms / MS
+        timeout = None if timeout_ms is None else timeout_ms / MS
         if timeout is None:
             timeout = DEFAULT_TIMEOUT_S if settle is None else DEFAULT_TIMEOUT_S + settle
 
@@ -91,9 +95,9 @@ def _status_block(lines: list[str]) -> str:
     return "".join(line + "\n" for line in lines)
 
 
-def _check_seconds(name: str, value: float | None) -> None:
-    if value is not None and (not math.isfinite(value) or value < 0):
-        raise ToolError(f"{name} must be a finite number >= 0 (got {value})")
+def _check_ms(name: str, value: int | None) -> None:
+    if value is not None and not 0 <= value <= MAX_MS:
+        raise ToolError(f"{name} must be a whole number of milliseconds from 0 to {MAX_MS} (got {value})")
 
 
 def main() -> None:

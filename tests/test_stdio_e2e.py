@@ -118,7 +118,7 @@ async def test_stdio_scenario() -> None:
             log.note(f"inputSchema: {json.dumps(schema, sort_keys=True)}")
             assert schema["required"] == ["command"]
             assert schema["properties"]["address"]["default"] == "127.0.0.1:3000"
-            for name in ("settle", "timeout"):
+            for name in ("settle_ms", "timeout_ms"):
                 assert schema["properties"][name]["default"] is None
                 assert {"type": "null"} in schema["properties"][name]["anyOf"]
 
@@ -130,16 +130,16 @@ async def test_stdio_scenario() -> None:
             _, text, _ = await call(session, log, "turn round trip with ANSI codes", command="look", address=address_a)
             assert text == "Hall\r\n"
 
-            # R6, R7: settle is a fixed window, so the call runs for the full second.
+            # R6, R7: settle_ms is a fixed window, so the call runs for the full second.
             result, text, elapsed = await call(
-                session, log, "settle=1.0 fixed window", command="look", address=address_a, settle=1.0
+                session, log, "settle_ms=1000 fixed window", command="look", address=address_a, settle_ms=1000
             )
             assert text == "Hall\r\n"
             assert 0.9 <= elapsed < 2.5
 
             # R9, ST3, ST5: timeout returns the partial text under a timed-out line, not as an error.
             result, text, elapsed = await call(
-                session, log, "timeout with partial text", command="partial", address=address_a, settle=5, timeout=1
+                session, log, "timeout with partial text", command="partial", address=address_a, settle_ms=5000, timeout_ms=1000
             )
             assert result.is_error is not True
             assert text == "[status] timed out after 1s\nabc"
@@ -168,8 +168,8 @@ async def test_stdio_scenario() -> None:
             # C6: two concurrent calls on one address are serialized; each gets only its own reply.
             started = time.monotonic()
             (_, first, _), (_, second, _) = await asyncio.gather(
-                call(session, log, "concurrent calls on A: first", command="a", address=address_a, settle=0.5),
-                call(session, log, "concurrent calls on A: second", command="b", address=address_a, settle=0.5),
+                call(session, log, "concurrent calls on A: first", command="a", address=address_a, settle_ms=500),
+                call(session, log, "concurrent calls on A: second", command="b", address=address_a, settle_ms=500),
             )
             combined = time.monotonic() - started
             log.section("concurrent calls on A: serialized")

@@ -7,7 +7,6 @@ Timing uses real time with wide tolerance (D4).
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from typing import Any
 
@@ -76,10 +75,10 @@ async def test_exactly_one_tool_with_the_spec_parameters() -> None:
     schema = tools[0].input_schema
     assert schema["required"] == ["command"]
     assert schema["properties"]["address"]["default"] == "127.0.0.1:3000"
-    for name in ("settle", "timeout"):
+    for name in ("settle_ms", "timeout_ms"):
         assert schema["properties"][name]["default"] is None
         kinds = {option.get("type") for option in schema["properties"][name]["anyOf"]}
-        assert kinds == {"number", "null"}
+        assert kinds == {"integer", "null"}
 
 
 async def test_no_structured_output() -> None:
@@ -94,14 +93,14 @@ async def test_null_equals_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     app = create_server()
 
     await call(app, command="look")
-    await call(app, command="look", settle=None, timeout=None)
+    await call(app, command="look", settle_ms=None, timeout_ms=None)
 
     assert seen == [(None, 20.0), (None, 20.0)]
 
 
 @pytest.mark.parametrize(
     ("arguments", "expected_timeout"),
-    [({}, 20.0), ({"settle": 5}, 25.0), ({"settle": 0}, 20.0), ({"timeout": 3}, 3.0)],
+    [({}, 20.0), ({"settle_ms": 5000}, 25.0), ({"settle_ms": 0}, 20.0), ({"timeout_ms": 3000}, 3.0)],
 )
 async def test_default_timeout(
     monkeypatch: pytest.MonkeyPatch,
@@ -116,39 +115,33 @@ async def test_default_timeout(
     assert seen[-1][1] == expected_timeout
 
 
-@pytest.mark.parametrize(("name", "value"), [("settle", -1), ("timeout", -1)])
-async def test_negative_is_rejected(name: str, value: float) -> None:
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("settle_ms", -1), ("timeout_ms", -1), ("settle_ms", 300_001), ("timeout_ms", 300_001)],
+)
+async def test_out_of_range_is_rejected(name: str, value: int) -> None:
     app = create_server()
 
     message = await call_error(app, command="look", **{name: value})
 
     assert name in message
-    assert "must be a finite number >= 0" in message
+    assert "must be a whole number of milliseconds from 0 to 300000" in message
 
 
 async def test_zero_timeout_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = stub_exchange(monkeypatch)
     app = create_server()
 
-    await call(app, command="look", timeout=0)
+    await call(app, command="look", timeout_ms=0)
 
     assert seen[-1][1] == 0
-
-
-@pytest.mark.parametrize("value", [math.nan, math.inf])
-async def test_non_finite_is_rejected(value: float) -> None:
-    app = create_server()
-
-    with pytest.raises(ToolError) as info:
-        await app.call_tool("text_adventure", {"command": "look", "timeout": value})
-    assert "timeout must be a finite number >= 0" in str(info.value)
 
 
 async def test_hard_cap_wins_over_settle() -> None:
     async with TurnService(silent) as svc:
         app = create_server()
         started = time.monotonic()
-        text = await call(app, command="look", address=svc.address, settle=1.0, timeout=0.2)
+        text = await call(app, command="look", address=svc.address, settle_ms=1000, timeout_ms=200)
         elapsed = time.monotonic() - started
 
     assert text == connected(svc.address) + "[status] timed out after 0.2s\n"
@@ -193,7 +186,7 @@ async def test_silent_service_reports_timeout() -> None:
     async with TurnService(silent) as svc:
         app = create_server()
         started = time.monotonic()
-        text = await call(app, command="look", address=svc.address, timeout=0.5)
+        text = await call(app, command="look", address=svc.address, timeout_ms=500)
         elapsed = time.monotonic() - started
 
     assert text == connected(svc.address) + "[status] timed out after 0.5s\n"
@@ -203,7 +196,7 @@ async def test_silent_service_reports_timeout() -> None:
 async def test_partial_output_is_returned_on_timeout() -> None:
     async with StreamService() as svc:
         app = create_server()
-        pending = asyncio.create_task(call(app, command="", address=svc.address, settle=5, timeout=1))
+        pending = asyncio.create_task(call(app, command="", address=svc.address, settle_ms=5000, timeout_ms=1000))
         await wait_until(lambda: svc.accepts == 1)
         svc.write(b"abc")
 
@@ -217,7 +210,7 @@ async def test_large_response_is_returned_whole() -> None:
     async with TurnService(lambda line: [(0.0, body)]) as svc:
         app = create_server()
 
-        text = await call(app, command="look", address=svc.address, settle=1.5)
+        text = await call(app, command="look", address=svc.address, settle_ms=1500)
 
     assert text == connected(svc.address) + body.decode()
 
@@ -228,10 +221,10 @@ async def test_large_response_is_returned_whole() -> None:
 async def test_connection_lost_mid_call_returns_status_and_partial_text() -> None:
     async with StreamService() as svc:
         app = create_server()
-        await call(app, command="", address=svc.address, settle=0.0)
+        await call(app, command="", address=svc.address, settle_ms=0)
         await wait_until(lambda: svc.received == b"\r\n")
 
-        pending = asyncio.create_task(call_error(app, command="look", address=svc.address, settle=5))
+        pending = asyncio.create_task(call_error(app, command="look", address=svc.address, settle_ms=5000))
         await wait_until(lambda: svc.received == b"\r\nlook\r\n")
         await asyncio.sleep(0.1)
         svc.write(b"abc")
